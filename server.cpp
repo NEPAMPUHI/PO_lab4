@@ -4,10 +4,17 @@
 #include <winsock2.h>
 #include <vector>
 #include <string>
+#include <thread>
 
 using namespace std;
 
-void place_row_max_on_main_diagonal(vector<vector<uint16_t>>& matrix) { //non-parallel
+struct Client {
+	vector<vector<uint16_t>> matrix;
+	uint16_t threadNum = 0;
+	bool status = false;
+};
+
+/*void place_row_max_on_main_diagonal(vector<vector<uint16_t>>& matrix) { //non-parallel
 	int max;
 	int max_i = 0;
 	int max_j = 0;
@@ -24,6 +31,46 @@ void place_row_max_on_main_diagonal(vector<vector<uint16_t>>& matrix) { //non-pa
 		matrix[max_i][max_j] = matrix[i][i];
 		matrix[i][i] = max;
 	}
+}*/
+
+void process_matrix_section(vector<vector<uint16_t>>& matrix, size_t first, size_t last) {
+	int max;
+	int max_i;
+	int max_j;
+	int matrix_size = matrix.size();
+	for (int i = first; i <= last; i++) {
+		max = matrix[i][0];
+		max_i = i;
+		max_j = 0;
+		for (int j = 1; j < matrix_size; j++) {
+			if (matrix[i][j] > max) {
+				max = matrix[i][j];
+				max_i = i;
+				max_j = j;
+			}
+		}
+		matrix[max_i][max_j] = matrix[i][i];
+		matrix[i][i] = max;
+	}
+}
+
+void modify_matrix(Client& client) {
+	client.status = true;
+	vector<thread> threads;
+	int rowsMin = client.matrix.size() / client.threadNum;
+	int rowsExtra = client.matrix.size() % client.threadNum;
+
+	for (int i = 0; i < client.threadNum; i++) {
+		int first = i * rowsMin + (i < rowsExtra ? i : rowsExtra);
+		int last = first + rowsMin + (i < rowsExtra ? 0 : -1);
+		threads.emplace_back(process_matrix_section, client.matrix, first, last);
+	}
+
+	for (auto& th : threads) {
+		th.join();
+	}
+
+	client.status = false;
 }
 
 bool send_all(SOCKET sock, const char* buf, int len) {
@@ -46,29 +93,29 @@ bool recv_all(SOCKET sock, char* buf, int len) {
 	return true;
 }
 
-bool send_message(SOCKET client, const string& message) {
+bool send_message(SOCKET sock, const string& message) {
 	uint16_t len = htons(static_cast<uint16_t>(message.size()));
-	if (!send_all(client, (char*)len, sizeof(len))) {
+	if (!send_all(sock, (char*)len, sizeof(len))) {
 		cerr << "Failed to send length\n";
 		return false;
 	}
-	if (!send_all(client, message.c_str(), message.size())) {
+	if (!send_all(sock, message.c_str(), message.size())) {
 		cerr << "Failed to send message\n";
 		return false;
 	}
 	return true;
 }
 
-bool receive_data(SOCKET client, vector<vector<uint16_t>>& matrix, size_t thread_num) {
+bool receive_data(SOCKET sock, vector<vector<uint16_t>>& matrix, size_t thread_num) {
 	uint8_t tag;
 	uint16_t len;
 
-	if (recv(client, (char*)tag, sizeof(tag), 0) == SOCKET_ERROR) {
+	if (recv(sock, (char*)tag, sizeof(tag), 0) == SOCKET_ERROR) {
 		cerr << "Receiving tag failed\n";
 		return false;
 	}
 
-	if (recv(client, (char*)len, sizeof(len), 0) == SOCKET_ERROR) {
+	if (recv(sock, (char*)len, sizeof(len), 0) == SOCKET_ERROR) {
 		cerr << "Receiving amount failed\n";
 		return false;
 	}
@@ -77,7 +124,7 @@ bool receive_data(SOCKET client, vector<vector<uint16_t>>& matrix, size_t thread
 	if (tag == 0x01) {
 		for (int i = 0; i < len; i++) {
 			for (int j = 0; j < len; j++) {
-				if (recv(client, (char*)matrix[j][i], sizeof(uint16_t), 0) == SOCKET_ERROR) {
+				if (recv(sock, (char*)matrix[j][i], sizeof(uint16_t), 0) == SOCKET_ERROR) {
 					cerr << "Receiving length failed\n";
 					return 0;
 				}
@@ -94,20 +141,33 @@ bool receive_data(SOCKET client, vector<vector<uint16_t>>& matrix, size_t thread
 	return true;
 }
 
-void handle_client(SOCKET client) {
-	if (!send_message(client, "Waiting for the matrix dimension and matrix values...\n")) return;
-	vector<vector<uint16_t>> matrix;
-	uint16_t thread_num;
-	if (!receive_data(client, matrix, thread_num)) {
-		if (!send_message(client, "Something is wrong with your data. \nDisconnecting...\n")) return;
-	}
-	if (!send_message(client, "Waiting for the number of threads...\n")) return;
-	if (!receive_data(client, matrix, thread_num)) {
-		if (!send_message(client, "Something is wrong with your data. \nDisconnecting...\n")) return;
-	}
-	if (!send_message(client, "Send START to modify matrix\n")) return;
-	if (!send_message(client, "Send GET to receive the result\n")) return;
+void handle_client(SOCKET sock) {
+	Client client;
+	bool shouldContinue = true;
+	//TODO: correct communication
+	try {
+		while (shouldContinue) {
+			if (!send_message(sock, "Waiting for the matrix dimension and matrix values...\n")) 
+				throw runtime_error("Something went wrong :(");
+			if (!receive_data(sock, client.matrix, client.threadNum)) {
+				if (!send_message(sock, "Something is wrong with your data. \nDisconnecting...\n")) return;
+			}
+			if (!send_message(sock, "Waiting for the number of threads...\n")) return;
+			if (!receive_data(sock, client.matrix, client.threadNum)) {
+				if (!send_message(sock, "Something is wrong with your data. \nDisconnecting...\n")) return;
+			}
+			if (!send_message(sock, "Send START to modify matrix\n")) return;
+			//answer
 
+			thread(modify_matrix, client);
+			if (!send_message(sock, "Send GET to receive the result\n")) return;
+		}
+	}
+	catch (const exception& e) {
+		cerr << "Something went wrong with client " << sock << ": " << e.what() << endl;
+		send_message(sock, e.what());
+	}
+	closesocket(sock);
 }
 
 int main() {
@@ -155,7 +215,7 @@ int main() {
 
 		cout << "New client is connected. Socket: " << clientSocket << endl;
 
-		//handle_client(clientSocket);
+		thread(handle_client, clientSocket).detach();
 	}
 
 	return 0;
