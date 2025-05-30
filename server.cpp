@@ -63,7 +63,7 @@ struct Client {
 			matrix.assign(len, vector<uint16_t>(len));
 			for (int i = 0; i < len; i++) {
 				for (int j = 0; j < len; j++) {
-					if (recv(sock, (char*)matrix[i][j], sizeof(uint16_t), 0) == SOCKET_ERROR) {
+					if (recv(sock, reinterpret_cast<char*>(&matrix[i][j]), sizeof(uint16_t), 0) == SOCKET_ERROR) {
 						cerr << "Receiving values failed\n";
 						return 0;
 					}
@@ -249,7 +249,8 @@ void handle_client(SOCKET sock) {
 				}
 
 				if (client_answer == "STATUS") {
-					client_answer = "Status: " + client.is_active ? "in progress" : "completed";
+					client_answer = "Status: ";
+					client_answer += client.is_active ? "in progress" : "completed";
 					client_answer += "\nTo see the status of the process, send STATUS. To get the result, send RESULT.\n ";
 					if (!client.receive_message(client_answer))
 						throw runtime_error("");
@@ -258,7 +259,8 @@ void handle_client(SOCKET sock) {
 					unique_lock<mutex> lock(client.mtx);
 					client.cond_var.wait(lock, [&client] { return client.is_active == false;  });
 
-					if (!send_all(sock, reinterpret_cast<char*>(&client.dimension), sizeof(client.dimension))) {
+					uint16_t dimension_n = htons(client.dimension);
+					if (!send_all(sock, reinterpret_cast<char*>(&dimension_n), sizeof(dimension_n))) {
 						throw runtime_error("Failed to send matrix dimension to client");
 					}
 					for (int i = 0; i < client.dimension; i++) {
