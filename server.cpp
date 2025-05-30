@@ -251,7 +251,7 @@ void handle_client(SOCKET sock) {
 				if (client_answer == "STATUS") {
 					client_answer = "Status: ";
 					client_answer += client.is_active ? "in progress" : "completed";
-					client_answer += "\nTo see the status of the process, send STATUS. To get the result, send RESULT.\n ";
+					client_answer += "\nTo see the status of the process, send STATUS. To get the result, send RESULT.\n";
 					if (!client.receive_message(client_answer))
 						throw runtime_error("");
 				}
@@ -279,9 +279,10 @@ void handle_client(SOCKET sock) {
 				}
 			}
 
-			if (!client.receive_message("You have received your processed matrix.That's all. Bye-bye.\n"))
+			if (!client.receive_message("You have received your processed matrix. That's all. Bye-bye.\n"))
 				throw runtime_error("");
 			should_continue = false;
+			cout << "The client " << sock << " has completed successfully" << endl;
 			closesocket(sock);
 		}
 	}
@@ -307,7 +308,8 @@ int main() {
 
 	sockaddr_in serverAddr{};
 	serverAddr.sin_family = AF_INET;
-	serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+	//serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+	serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
 	serverAddr.sin_port = htons(9000);
 
 	if (bind(serverSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
